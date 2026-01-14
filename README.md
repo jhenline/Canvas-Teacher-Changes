@@ -1,13 +1,29 @@
 # Canvas Teacher Changes Tracker
 
-This script tracks changes in the list of instructors associated with courses for a specified term in Canvas. The first time the script runs, it generates a list of courses and their associated teachers. On subsequent runs, it compares the current list with the previous list, logs any changes, and writes the results to a MySQL database.
+This script tracks changes in the list of instructors associated with Canvas courses for a specified academic term. It is designed to be run repeatedly (for example, via cron) to detect when instructors are **added to or removed from courses** and log those changes to a MySQL database.
+
+On the **first run for a term**, the script establishes a baseline snapshot of courses and instructors. On **subsequent runs**, it compares the current state against that baseline and records any changes.
+
+---
 
 ## Features
 
-- **Initial Data Generation**: The script generates an initial list of courses and their associated teachers.
-- **Change Detection**: On subsequent runs, the script compares the current list of teachers with the previous one, identifying any additions or removals.
-- **Parallel Execution**: The script uses Python's `concurrent.futures` for parallelized fetching of courses and instructors, significantly reducing execution time.
-- **Database Logging**: Changes in the list of instructors are logged into a MySQL database.
+- **Initial Baseline Generation**
+  - On first run, the script generates and saves a list of courses and their associated instructors.
+  - No database changes are logged on the first run.
+
+- **Change Detection**
+  - On subsequent runs, the script detects:
+    - Instructors added to a course
+    - Instructors removed from a course
+
+- **Parallel Execution**
+  - Uses Python’s `concurrent.futures` to fetch courses and instructors in parallel for improved performance.
+
+- **Database Logging**
+  - Instructor additions and removals are logged to a MySQL table (`teacher_changes`).
+
+---
 
 ## Requirements
 
@@ -16,3 +32,24 @@ This script tracks changes in the list of instructors associated with courses fo
   - `requests`
   - `mysql-connector-python`
   - `configparser`
+
+---
+
+## Configuration
+
+The script reads configuration values from a `config.ini` file. This file must contain:
+
+- MySQL connection details
+- Canvas API token
+
+Example structure:
+
+```ini
+[mysql]
+DB_HOST=localhost
+DB_USER=canvas_user
+DB_PASSWORD=securepassword
+DB_DATABASE=canvas_db
+
+[auth]
+token=YOUR_CANVAS_API_TOKEN

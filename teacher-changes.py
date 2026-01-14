@@ -25,9 +25,9 @@ db_config = config['mysql']
 API_KEY = config['auth']['token']
 
 # API Configuration
-API_URL = 'https://calstatela.instructure.com/api/v1'
-ENROLLMENT_TERM_ID = '335'  # Fall 2024
-ACCOUNT_ID = '1'
+API_URL = 'https://calstatela.test.instructure.com/api/v1'
+ENROLLMENT_TERM_ID = '349'  # Spring 2026
+ACCOUNT_ID = '10'
 
 
 def create_db_connection():
