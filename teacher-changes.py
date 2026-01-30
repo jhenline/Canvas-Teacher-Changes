@@ -31,6 +31,8 @@ SENDGRID_API_KEY = config['auth'].get('sendgrid_api_key', '').strip()
 API_URL = 'https://calstatela.instructure.com/api/v1'
 ENROLLMENT_TERM_ID = '349'  # Spring 2026
 ACCOUNT_ID = '10'
+TEST_MODE = True
+TEST_COURSE_ID = '107746'
 
 
 def create_db_connection():
@@ -151,11 +153,14 @@ def fetch_current_teachers():
     course_ids_by_name = {}
 
     # Parallel fetch for courses
-    courses_endpoint = f"{API_URL}/accounts/{ACCOUNT_ID}/courses"
-    courses_params = {'enrollment_term_id': ENROLLMENT_TERM_ID, 'per_page': 100}
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        courses_future = executor.submit(fetch_courses, headers, courses_endpoint, courses_params)
-        courses = courses_future.result()
+    if TEST_MODE:
+        courses = [{"id": TEST_COURSE_ID, "name": f"Test course {TEST_COURSE_ID}"}]
+    else:
+        courses_endpoint = f"{API_URL}/accounts/{ACCOUNT_ID}/courses"
+        courses_params = {'enrollment_term_id': ENROLLMENT_TERM_ID, 'per_page': 100}
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            courses_future = executor.submit(fetch_courses, headers, courses_endpoint, courses_params)
+            courses = courses_future.result()
 
     # Parallel fetch for instructors for each course
     with concurrent.futures.ThreadPoolExecutor() as executor:
