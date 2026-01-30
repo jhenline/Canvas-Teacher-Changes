@@ -1,5 +1,6 @@
 # Author: Jeff Henline (1/12/24)
-# Last change: 1/13/24 - Remove console print statements, added printing of date
+# 1/13/24 - Remove console print statements, added printing of date
+# 1/30/26 - Added SendGrid email notification for teacher changes
 # The first time this script runs, it generates a list of courses and associated teachers for a given
 # term in Canvas. Each subsequent time the script runs, it compares the current associated teachers
 # against the previous list and writes the changes to FDMS
@@ -23,6 +24,7 @@ config.read('/home/bitnami/scripts/config.ini')
 # Retrieve MySQL configuration and API key
 db_config = config['mysql']
 API_KEY = config['auth']['token']
+SENDGRID_API_KEY = config['auth'].get('sendgrid_api_key', '').strip()
 
 # API Configuration
 API_URL = 'https://calstatela.instructure.com/api/v1'
@@ -68,6 +70,52 @@ def log_teacher_change(connection, course, action, teacher):
     cursor.execute(query, (course, action, teacher))
     connection.commit()
     cursor.close()
+
+
+def send_teacher_change_email(course, action, teacher):
+    """
+    Send an email notification via SendGrid for a teacher change.
+    """
+    if not SENDGRID_API_KEY:
+        print("SendGrid API key not configured. Skipping email.", flush=True)
+        return
+
+    email_payload = {
+        "personalizations": [
+            {
+                "to": [{"email": "jhenlin2@calstatela.edu"}],
+                "subject": f"Canvas teacher {action}: {course}"
+            }
+        ],
+        "from": {"email": "no-reply@calstatela.edu"},
+        "content": [
+            {
+                "type": "text/plain",
+                "value": (
+                    f"Teacher change detected.\n\n"
+                    f"Course: {course}\n"
+                    f"Action: {action}\n"
+                    f"Teacher: {teacher}\n"
+                    f"Timestamp: {datetime.datetime.now()}\n"
+                )
+            }
+        ]
+    }
+
+    response = requests.post(
+        "https://api.sendgrid.com/v3/mail/send",
+        headers={
+            "Authorization": f"Bearer {SENDGRID_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json=email_payload
+    )
+
+    if response.status_code >= 300:
+        print(
+            f"SendGrid email failed ({response.status_code}): {response.text}",
+            flush=True
+        )
 
 
 def fetch_courses(headers, courses_endpoint, courses_params):
@@ -170,12 +218,14 @@ def compare_teachers(old_list, new_list, db_connection):
         for teacher in removed_teachers:
             print(f"In {course}, {teacher} was removed")
             log_teacher_change(db_connection, course, 'removed', teacher)
+            send_teacher_change_email(course, 'removed', teacher)
 
         # Added teachers
         added_teachers = new_teachers - old_teachers
         for teacher in added_teachers:
             print(f"In {course}, {teacher} was added")
             log_teacher_change(db_connection, course, 'added', teacher)
+            send_teacher_change_email(course, 'added', teacher)
 
 
 def main():
