@@ -1,6 +1,7 @@
 # Author: Jeff Henline (1/12/24)
 # 1/13/24 - Remove console print statements, added printing of date
-# 1/30/26 - Added SendGrid email notification for teacher changes
+# 1/30/26 - Added SendGrid email notification for teacher changes (email address is hardcoded)
+#
 # The first time this script runs, it generates a list of courses and associated teachers for a given
 # term in Canvas. Each subsequent time the script runs, it compares the current associated teachers
 # against the previous list and writes the changes to FDMS
@@ -72,32 +73,37 @@ def log_teacher_change(connection, course, action, teacher):
     cursor.close()
 
 
-def send_teacher_change_email(course, action, teacher):
+def send_teacher_change_summary_email(changes):
     """
-    Send an email notification via SendGrid for a teacher change.
+    Send a summary email notification via SendGrid for teacher changes.
     """
     if not SENDGRID_API_KEY:
         print("SendGrid API key not configured. Skipping email.", flush=True)
         return
 
+    if not changes:
+        return
+
+    lines = ["Teacher changes detected:\n"]
+    for change in changes:
+        lines.append(
+            f"- Course: {change['course']} | Action: {change['action']} | "
+            f"Teacher: {change['teacher']} | Source: {change['source']}"
+        )
+    lines.append(f"\nTimestamp: {datetime.datetime.now()}")
+
     email_payload = {
         "personalizations": [
             {
                 "to": [{"email": "jhenlin2@calstatela.edu"}],
-                "subject": f"Canvas teacher {action}: {course}"
+                "subject": "Canvas teacher change summary"
             }
         ],
         "from": {"email": "no-reply@calstatela.edu"},
         "content": [
             {
                 "type": "text/plain",
-                "value": (
-                    f"Teacher change detected.\n\n"
-                    f"Course: {course}\n"
-                    f"Action: {action}\n"
-                    f"Teacher: {teacher}\n"
-                    f"Timestamp: {datetime.datetime.now()}\n"
-                )
+                "value": "\n".join(lines)
             }
         ]
     }
@@ -134,6 +140,7 @@ def fetch_courses(headers, courses_endpoint, courses_params):
 def fetch_current_teachers():
     headers = {'Authorization': f'Bearer {API_KEY}'}
     teachers = {}
+    course_ids_by_name = {}
 
     # Parallel fetch for courses
     courses_endpoint = f"{API_URL}/accounts/{ACCOUNT_ID}/courses"
@@ -152,10 +159,42 @@ def fetch_current_teachers():
             course = future_to_instructors[future]
             teacher_names, skipped = future.result()
             teachers[course['name']] = teacher_names
+            course_ids_by_name[course['name']] = course['id']
             if skipped:
                 print(f"Skipped course {course['id']} ({course['name']}) due to 404.", flush=True)
 
-    return teachers
+    return teachers, course_ids_by_name
+
+
+def fetch_teacher_sis_import_id(course_id, teacher_name):
+    """
+    Fetch the SIS import id for a teacher enrollment in a course.
+    Returns None if not found or if enrollment is not SIS-created.
+    """
+    headers = {'Authorization': f'Bearer {API_KEY}'}
+    enrollments_endpoint = f"{API_URL}/courses/{course_id}/enrollments"
+    enrollments_params = {
+        'type[]': ['TeacherEnrollment'],
+        'state[]': ['active', 'invited'],
+        'include[]': ['user'],
+        'per_page': 100
+    }
+
+    while enrollments_endpoint:
+        response = requests.get(enrollments_endpoint, headers=headers, params=enrollments_params)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        enrollments = response.json()
+
+        for enrollment in enrollments:
+            user = enrollment.get('user', {})
+            if user.get('name') == teacher_name or user.get('sortable_name') == teacher_name:
+                return enrollment.get('sis_import_id')
+
+        enrollments_endpoint = get_next_link(response.headers.get('Link'))
+
+    return None
 
 def fetch_instructors_for_course(headers, course_id):
     """
@@ -209,23 +248,45 @@ def load_teachers_list(filename='teachers_list.json'):
     return None
 
 
-def compare_teachers(old_list, new_list, db_connection):
+def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
+    changes = []
     for course, new_teachers in new_list.items():
         old_teachers = old_list.get(course, set())
+        course_id = course_ids_by_name.get(course)
 
         # Removed teachers
         removed_teachers = old_teachers - new_teachers
         for teacher in removed_teachers:
             print(f"In {course}, {teacher} was removed")
             log_teacher_change(db_connection, course, 'removed', teacher)
-            send_teacher_change_email(course, 'removed', teacher)
+            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher) if course_id else None
+            source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
+            changes.append(
+                {
+                    "course": course,
+                    "action": "removed",
+                    "teacher": teacher,
+                    "source": source
+                }
+            )
 
         # Added teachers
         added_teachers = new_teachers - old_teachers
         for teacher in added_teachers:
             print(f"In {course}, {teacher} was added")
             log_teacher_change(db_connection, course, 'added', teacher)
-            send_teacher_change_email(course, 'added', teacher)
+            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher) if course_id else None
+            source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
+            changes.append(
+                {
+                    "course": course,
+                    "action": "added",
+                    "teacher": teacher,
+                    "source": source
+                }
+            )
+
+    return changes
 
 
 def main():
@@ -236,11 +297,17 @@ def main():
         print("Failed to connect to the database. Exiting.")
         return
 
-    current_teachers = fetch_current_teachers()
+    current_teachers, course_ids_by_name = fetch_current_teachers()
     previous_teachers = load_teachers_list()
 
     if previous_teachers is not None:
-        compare_teachers(previous_teachers, current_teachers, db_connection)  # Pass db_connection here
+        changes = compare_teachers(
+            previous_teachers,
+            current_teachers,
+            course_ids_by_name,
+            db_connection
+        )
+        send_teacher_change_summary_email(changes)
     else:
         print("No previous data found. Saving current list.")
 
