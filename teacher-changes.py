@@ -433,7 +433,7 @@ def main():
         return
 
     current_teachers, course_names_by_id = fetch_current_teachers()
-    previous_teachers = load_teachers_list(course_names_by_id)
+    previous_teachers = None if TEST_MODE else load_teachers_list(course_names_by_id)
 
     if previous_teachers is not None:
         changes = compare_teachers(
@@ -446,7 +446,8 @@ def main():
     else:
         print("No previous data found. Saving current list.")
 
-    save_teachers_list(current_teachers)
+    if not TEST_MODE:
+        save_teachers_list(current_teachers)
 
     db_connection.close()  # Close the database connection
 
