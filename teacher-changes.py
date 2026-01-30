@@ -180,7 +180,7 @@ def fetch_courses(headers, courses_endpoint, courses_params):
 def fetch_current_teachers():
     headers = {'Authorization': f'Bearer {API_KEY}'}
     teachers = {}
-    course_ids_by_name = {}
+    course_names_by_id = {}
 
     # Parallel fetch for courses
     if TEST_MODE:
@@ -201,12 +201,13 @@ def fetch_current_teachers():
         for future in concurrent.futures.as_completed(future_to_instructors):
             course = future_to_instructors[future]
             teachers_by_id, skipped = future.result()
-            teachers[course['name']] = teachers_by_id
-            course_ids_by_name[course['name']] = course['id']
+            course_id = str(course['id'])
+            teachers[course_id] = teachers_by_id
+            course_names_by_id[course_id] = course['name']
             if skipped:
                 print(f"Skipped course {course['id']} ({course['name']}) due to 404.", flush=True)
 
-    return teachers, course_ids_by_name
+    return teachers, course_names_by_id
 
 
 def fetch_teacher_sis_import_id(course_id, teacher_id):
@@ -275,8 +276,8 @@ def get_next_link(link_header):
 def save_teachers_list(teachers, filename='teachers_list.json'):
     """ Save the teachers list to a file in JSON format. """
     teachers_for_json = {}
-    for course, teachers_by_id in teachers.items():
-        teachers_for_json[course] = [
+    for course_id, teachers_by_id in teachers.items():
+        teachers_for_json[str(course_id)] = [
             {"id": teacher_id, "name": teacher_name}
             for teacher_id, teacher_name in teachers_by_id.items()
         ]
@@ -284,16 +285,23 @@ def save_teachers_list(teachers, filename='teachers_list.json'):
         json.dump(teachers_for_json, file)
 
 
-def load_teachers_list(filename='teachers_list.json'):
+def load_teachers_list(course_names_by_id=None, filename='teachers_list.json'):
     """ Load the teachers list from a file (supports legacy and current formats). """
     if os.path.exists(filename):
         with open(filename, 'r') as file:
             teachers = json.load(file)
             normalized = {}
-            for course, entries in teachers.items():
+            name_to_id = {}
+            if course_names_by_id:
+                name_to_id = {name: course_id for course_id, name in course_names_by_id.items()}
+
+            for course_key, entries in teachers.items():
+                course_id = course_key if str(course_key).isdigit() else name_to_id.get(course_key)
+                if not course_id:
+                    continue
                 # Legacy format: list of names
                 if entries and isinstance(entries[0], str):
-                    normalized[course] = set(entries)
+                    normalized[str(course_id)] = set(entries)
                     continue
 
                 # Current format: list of {id, name}
@@ -303,17 +311,17 @@ def load_teachers_list(filename='teachers_list.json'):
                     teacher_name = entry.get("name")
                     if teacher_id is not None and teacher_name:
                         teachers_by_id[int(teacher_id)] = teacher_name
-                normalized[course] = teachers_by_id
+                normalized[str(course_id)] = teachers_by_id
             return normalized
     return None
 
 
-def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
+def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
     changes = []
-    for course, new_teachers in new_list.items():
-        old_teachers = old_list.get(course, set())
-        course_id = course_ids_by_name.get(course)
-        course_url = f"{API_URL.replace('/api/v1', '')}/courses/{course_id}/users" if course_id else None
+    for course_id, new_teachers in new_list.items():
+        old_teachers = old_list.get(course_id, set())
+        course_name = course_names_by_id.get(str(course_id), f"Course {course_id}")
+        course_url = f"{API_URL.replace('/api/v1', '')}/courses/{course_id}/users"
 
         # Legacy support: old list stored as names
         if isinstance(old_teachers, set):
@@ -322,11 +330,11 @@ def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
             added_names = new_names - old_teachers
 
             for teacher_name in removed_names:
-                print(f"In {course}, {teacher_name} was removed")
-                log_teacher_change(db_connection, course, 'removed', teacher_name)
+                print(f"In {course_name}, {teacher_name} was removed")
+                log_teacher_change(db_connection, course_name, 'removed', teacher_name)
                 changes.append(
                     {
-                        "course": course,
+                        "course": course_name,
                         "course_id": course_id,
                         "course_url": course_url,
                         "action": "removed",
@@ -342,11 +350,11 @@ def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
                     (tid for tid, name in new_teachers.items() if name == teacher_name),
                     None
                 )
-                print(f"In {course}, {teacher_name} was added")
-                log_teacher_change(db_connection, course, 'added', teacher_name)
+                print(f"In {course_name}, {teacher_name} was added")
+                log_teacher_change(db_connection, course_name, 'added', teacher_name)
                 sis_import_id = (
                     fetch_teacher_sis_import_id(course_id, teacher_id)
-                    if course_id and teacher_id
+                    if teacher_id
                     else None
                 )
                 source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
@@ -357,7 +365,7 @@ def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
                 )
                 changes.append(
                     {
-                        "course": course,
+                        "course": course_name,
                         "course_id": course_id,
                         "course_url": course_url,
                         "action": "added",
@@ -373,14 +381,14 @@ def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
         removed_teachers = set(old_teachers.keys()) - set(new_teachers.keys())
         for teacher_id in removed_teachers:
             teacher_name = old_teachers.get(teacher_id, "Unknown")
-            print(f"In {course}, {teacher_name} was removed")
-            log_teacher_change(db_connection, course, 'removed', teacher_name)
-            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id) if course_id else None
+            print(f"In {course_name}, {teacher_name} was removed")
+            log_teacher_change(db_connection, course_name, 'removed', teacher_name)
+            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id)
             source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
             teacher_url = f"{API_URL.replace('/api/v1', '')}/users/{teacher_id}"
             changes.append(
                 {
-                    "course": course,
+                    "course": course_name,
                     "course_id": course_id,
                     "course_url": course_url,
                     "action": "removed",
@@ -395,14 +403,14 @@ def compare_teachers(old_list, new_list, course_ids_by_name, db_connection):
         added_teachers = set(new_teachers.keys()) - set(old_teachers.keys())
         for teacher_id in added_teachers:
             teacher_name = new_teachers.get(teacher_id, "Unknown")
-            print(f"In {course}, {teacher_name} was added")
-            log_teacher_change(db_connection, course, 'added', teacher_name)
-            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id) if course_id else None
+            print(f"In {course_name}, {teacher_name} was added")
+            log_teacher_change(db_connection, course_name, 'added', teacher_name)
+            sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id)
             source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
             teacher_url = f"{API_URL.replace('/api/v1', '')}/users/{teacher_id}"
             changes.append(
                 {
-                    "course": course,
+                    "course": course_name,
                     "course_id": course_id,
                     "course_url": course_url,
                     "action": "added",
@@ -424,14 +432,14 @@ def main():
         print("Failed to connect to the database. Exiting.")
         return
 
-    current_teachers, course_ids_by_name = fetch_current_teachers()
-    previous_teachers = load_teachers_list()
+    current_teachers, course_names_by_id = fetch_current_teachers()
+    previous_teachers = load_teachers_list(course_names_by_id)
 
     if previous_teachers is not None:
         changes = compare_teachers(
             previous_teachers,
             current_teachers,
-            course_ids_by_name,
+            course_names_by_id,
             db_connection
         )
         send_teacher_change_summary_email(changes)
