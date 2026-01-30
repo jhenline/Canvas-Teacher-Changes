@@ -25,7 +25,7 @@ db_config = config['mysql']
 API_KEY = config['auth']['token']
 
 # API Configuration
-API_URL = 'https://calstatela.test.instructure.com/api/v1'
+API_URL = 'https://calstatela.instructure.com/api/v1'
 ENROLLMENT_TERM_ID = '349'  # Spring 2026
 ACCOUNT_ID = '10'
 
@@ -50,7 +50,9 @@ def fetch_instructors_for_single_course(course, headers):
     Fetch instructors for a single course.
     """
     course_id = course['id']
-    instructors = fetch_instructors_for_course(course_id, headers)
+    instructors, skipped = fetch_instructors_for_course(headers, course_id)
+    if skipped:
+        print(f"Skipped course {course_id} ({course['name']}) due to 404.", flush=True)
     return course['name'], instructors
 
 
@@ -94,11 +96,16 @@ def fetch_current_teachers():
 
     # Parallel fetch for instructors for each course
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        future_to_instructors = {executor.submit(fetch_instructors_for_course, headers, course['id']): course for course in courses}
+        future_to_instructors = {
+            executor.submit(fetch_instructors_for_course, headers, course['id']): course
+            for course in courses
+        }
         for future in concurrent.futures.as_completed(future_to_instructors):
             course = future_to_instructors[future]
-            teacher_names = future.result()
+            teacher_names, skipped = future.result()
             teachers[course['name']] = teacher_names
+            if skipped:
+                print(f"Skipped course {course['id']} ({course['name']}) due to 404.", flush=True)
 
     return teachers
 
@@ -107,14 +114,20 @@ def fetch_instructors_for_course(headers, course_id):
     Fetch all instructors for a given course with pagination.
     """
     instructors_endpoint = f"{API_URL}/courses/{course_id}/users"
-    instructors_params = {'enrollment_type': ['teacher'], 'per_page': 100}
+    instructors_params = {
+        'enrollment_type[]': ['teacher'],
+        'enrollment_state[]': ['active', 'invited'],
+        'per_page': 100
+    }
     instructors = []
     while instructors_endpoint:
         response = requests.get(instructors_endpoint, headers=headers, params=instructors_params)
+        if response.status_code == 404:
+            return set(), True
         response.raise_for_status()
         instructors.extend(response.json())
         instructors_endpoint = get_next_link(response.headers.get('Link'))
-    return {instructor['name'] for instructor in instructors}
+    return {instructor['name'] for instructor in instructors}, False
 
 def get_next_link(link_header):
     """
