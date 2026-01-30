@@ -13,6 +13,7 @@ import requests
 import mysql.connector
 from mysql.connector import Error
 import datetime
+import html
 import concurrent.futures
 import configparser
 
@@ -87,6 +88,7 @@ def send_teacher_change_summary_email(changes):
         return
 
     lines = ["Teacher changes detected:\n"]
+    html_lines = ["<p>Teacher changes detected:</p>", "<ul>"]
     for change in changes:
         course_text = change["course"]
         if change.get("course_url"):
@@ -100,7 +102,31 @@ def send_teacher_change_summary_email(changes):
             f"- Course: {course_text} | Action: {change['action']} | "
             f"Teacher: {teacher_text} | Source: {change['source']}"
         )
+        course_label = html.escape(change["course"])
+        course_link = change.get("course_url")
+        if course_link:
+            course_html = f'<a href="{html.escape(course_link)}">{course_label}</a>'
+        else:
+            course_html = course_label
+
+        teacher_label = html.escape(change["teacher"])
+        teacher_link = change.get("teacher_url")
+        if teacher_link:
+            teacher_html = f'<a href="{html.escape(teacher_link)}">{teacher_label}</a>'
+        else:
+            teacher_html = teacher_label
+
+        html_lines.append(
+            "<li>"
+            f"Course: {course_html} | "
+            f"Action: {html.escape(change['action'])} | "
+            f"Teacher: {teacher_html} | "
+            f"Source: {html.escape(change['source'])}"
+            "</li>"
+        )
     lines.append(f"\nTimestamp: {datetime.datetime.now()}")
+    html_lines.append("</ul>")
+    html_lines.append(f"<p>Timestamp: {html.escape(str(datetime.datetime.now()))}</p>")
 
     email_payload = {
         "personalizations": [
@@ -114,6 +140,10 @@ def send_teacher_change_summary_email(changes):
             {
                 "type": "text/plain",
                 "value": "\n".join(lines)
+            },
+            {
+                "type": "text/html",
+                "value": "".join(html_lines)
             }
         ]
     }
