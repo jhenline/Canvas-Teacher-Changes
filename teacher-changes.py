@@ -433,7 +433,7 @@ def main():
         return
 
     current_teachers, course_names_by_id = fetch_current_teachers()
-    previous_teachers = None if TEST_MODE else load_teachers_list(course_names_by_id)
+    previous_teachers = load_teachers_list(course_names_by_id)
 
     if previous_teachers is not None:
         changes = compare_teachers(
