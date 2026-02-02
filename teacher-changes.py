@@ -1,6 +1,7 @@
 # Author: Jeff Henline (1/12/24)
 # 1/13/24 - Remove console print statements, added printing of date
 # 1/30/26 - Added SendGrid email notification for teacher changes (email address is hardcoded)
+# 2/2/26 - Added SIS import ID to the email notification
 #
 # The first time this script runs, it generates a list of courses and associated teachers for a given
 # term in Canvas. Each subsequent time the script runs, it compares the current associated teachers
@@ -357,7 +358,11 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                     if teacher_id
                     else None
                 )
-                source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
+                source = (
+                    f"SIS import ID: {sis_import_id}"
+                    if sis_import_id
+                    else "manual/API (sis_import_id is null)"
+                )
                 teacher_url = (
                     f"{API_URL.replace('/api/v1', '')}/users/{teacher_id}"
                     if teacher_id
@@ -384,7 +389,11 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
             print(f"In {course_name}, {teacher_name} was removed")
             log_teacher_change(db_connection, course_name, 'removed', teacher_name)
             sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id)
-            source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
+            source = (
+                f"SIS import ID: {sis_import_id}"
+                if sis_import_id
+                else "manual/API (sis_import_id is null)"
+            )
             teacher_url = f"{API_URL.replace('/api/v1', '')}/users/{teacher_id}"
             changes.append(
                 {
@@ -395,7 +404,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                     "teacher": teacher_name,
                     "teacher_id": teacher_id,
                     "teacher_url": teacher_url,
-                    "source": source
+                    "source": source,
+                    "sis_import_id": sis_import_id
                 }
             )
 
@@ -406,7 +416,11 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
             print(f"In {course_name}, {teacher_name} was added")
             log_teacher_change(db_connection, course_name, 'added', teacher_name)
             sis_import_id = fetch_teacher_sis_import_id(course_id, teacher_id)
-            source = "SIS import" if sis_import_id else "manual/API (sis_import_id is null)"
+            source = (
+                f"SIS import ID: {sis_import_id}"
+                if sis_import_id
+                else "manual/API (sis_import_id is null)"
+            )
             teacher_url = f"{API_URL.replace('/api/v1', '')}/users/{teacher_id}"
             changes.append(
                 {
@@ -417,7 +431,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                     "teacher": teacher_name,
                     "teacher_id": teacher_id,
                     "teacher_url": teacher_url,
-                    "source": source
+                    "source": source,
+                    "sis_import_id": sis_import_id
                 }
             )
 
