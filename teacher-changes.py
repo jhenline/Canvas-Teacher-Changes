@@ -2,6 +2,7 @@
 # 1/13/24 - Remove console print statements, added printing of date
 # 1/30/26 - Added SendGrid email notification for teacher changes (email address is hardcoded)
 # 2/2/26 - Added SIS import ID to the email notification
+# 2/4/26 - Added note to email notification if course appears empty
 #
 # The first time this script runs, it generates a list of courses and associated teachers for a given
 # term in Canvas. Each subsequent time the script runs, it compares the current associated teachers
@@ -33,8 +34,9 @@ SENDGRID_API_KEY = config['auth'].get('sendgrid_api_key', '').strip()
 API_URL = 'https://calstatela.instructure.com/api/v1'
 ENROLLMENT_TERM_ID = '349'  # Spring 2026
 ACCOUNT_ID = '10'
-TEST_MODE = True
+TEST_MODE = False
 TEST_COURSE_ID = '107746'
+CHECK_EMPTY_COURSE = True
 
 
 def create_db_connection():
@@ -99,9 +101,15 @@ def send_teacher_change_summary_email(changes):
         if change.get("teacher_url"):
             teacher_text = f"{teacher_text} ({change['teacher_url']})"
 
+        empty_note_text = ""
+        empty_note_html = ""
+        if change.get("course_empty"):
+            empty_note_text = " | Note: course appears empty"
+            empty_note_html = " | <em>Note: course appears empty</em>"
+
         lines.append(
             f"- Course: {course_text} | Action: {change['action']} | "
-            f"Teacher: {teacher_text} | Source: {change['source']}"
+            f"Teacher: {teacher_text} | Source: {change['source']}{empty_note_text}"
         )
         course_label = html.escape(change["course"])
         course_link = change.get("course_url")
@@ -122,7 +130,7 @@ def send_teacher_change_summary_email(changes):
             f"Course: {course_html} | "
             f"Action: {html.escape(change['action'])} | "
             f"Teacher: {teacher_html} | "
-            f"Source: {html.escape(change['source'])}"
+            f"Source: {html.escape(change['source'])}{empty_note_html}"
             "</li>"
         )
     lines.append(f"\nTimestamp: {datetime.datetime.now()}")
@@ -261,6 +269,28 @@ def fetch_instructors_for_course(headers, course_id):
         instructors_endpoint = get_next_link(response.headers.get('Link'))
     return {instructor['id']: instructor['name'] for instructor in instructors}, False
 
+def is_course_empty(course_id, headers):
+    """
+    Return True if assignments/modules/quizzes/files/pages all return empty.
+    """
+    endpoints = [
+        f"{API_URL}/courses/{course_id}/assignments",
+        f"{API_URL}/courses/{course_id}/modules",
+        f"{API_URL}/courses/{course_id}/quizzes",
+        f"{API_URL}/courses/{course_id}/files",
+        f"{API_URL}/courses/{course_id}/pages"
+    ]
+    params = {'per_page': 1}
+    for endpoint in endpoints:
+        response = requests.get(endpoint, headers=headers, params=params)
+        if response.status_code == 404:
+            return False
+        response.raise_for_status()
+        data = response.json()
+        if data:
+            return False
+    return True
+
 def get_next_link(link_header):
     """
     Extract the 'next' link from the Link header.
@@ -319,10 +349,16 @@ def load_teachers_list(course_names_by_id=None, filename='teachers_list.json'):
 
 def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
     changes = []
+    headers = {'Authorization': f'Bearer {API_KEY}'}
     for course_id, new_teachers in new_list.items():
         old_teachers = old_list.get(course_id, set())
         course_name = course_names_by_id.get(str(course_id), f"Course {course_id}")
         course_url = f"{API_URL.replace('/api/v1', '')}/courses/{course_id}/users"
+        course_empty = (
+            is_course_empty(course_id, headers)
+            if CHECK_EMPTY_COURSE
+            else False
+        )
 
         # Legacy support: old list stored as names
         if isinstance(old_teachers, set):
@@ -342,7 +378,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                         "teacher": teacher_name,
                         "teacher_id": None,
                         "teacher_url": None,
-                        "source": "unknown (legacy data)"
+                        "source": "unknown (legacy data)",
+                        "course_empty": course_empty
                     }
                 )
 
@@ -377,7 +414,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                         "teacher": teacher_name,
                         "teacher_id": teacher_id,
                         "teacher_url": teacher_url,
-                        "source": source
+                        "source": source,
+                        "course_empty": course_empty
                     }
                 )
             continue
@@ -405,7 +443,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                     "teacher_id": teacher_id,
                     "teacher_url": teacher_url,
                     "source": source,
-                    "sis_import_id": sis_import_id
+                    "sis_import_id": sis_import_id,
+                    "course_empty": course_empty
                 }
             )
 
@@ -432,7 +471,8 @@ def compare_teachers(old_list, new_list, course_names_by_id, db_connection):
                     "teacher_id": teacher_id,
                     "teacher_url": teacher_url,
                     "source": source,
-                    "sis_import_id": sis_import_id
+                    "sis_import_id": sis_import_id,
+                    "course_empty": course_empty
                 }
             )
 
